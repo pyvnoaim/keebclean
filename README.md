@@ -77,7 +77,7 @@ Both live under **System Settings > Privacy & Security**.
 
 ## Switch sounds
 
-keebclean plays recordings from a `sounds` folder next to the binary. None are included, since good recordings are rarely free to redistribute. Add short WAV, AIFF or CAF files named like this:
+keebclean plays recordings from `~/.config/keebclean/sounds`. None are included, since good recordings are rarely free to redistribute. Add short WAV, AIFF or CAF files named like this:
 
 | File | Plays on |
 | --- | --- |
@@ -86,7 +86,7 @@ keebclean plays recordings from a `sounds` folder next to the binary. None are i
 | `press-space.wav`, `press-enter.wav`, `press-backspace.wav` | those keys, instead of the generic press |
 | `release-space.wav`, `release-enter.wav`, `release-backspace.wav` | releasing those keys |
 
-Trim the silence at the start of each file, or presses will feel delayed. Without any files keebclean is silent.
+Trim the silence at the start of each file, or presses will feel delayed. Without any files keebclean is silent. The next lock notices new or changed sounds and asks for your password once to pick them up; they survive updates.
 
 ## How it works
 

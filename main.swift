@@ -381,9 +381,16 @@ func sudo(_ a: [String], quiet: Bool = false) -> Bool {
     return p.terminationStatus == 0
 }
 
+// your sounds live in ~/.config/keebclean/sounds so they survive updates; a sounds folder next to the binary
+// (a source checkout) is the fallback
+let soundsSource: String = {
+    let personal = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".config/keebclean/sounds").path
+    return FileManager.default.fileExists(atPath: personal) ? personal : me.deletingLastPathComponent().appendingPathComponent("sounds").path
+}()
+
 // one password prompt: root-owned copy, hash-pinned sudo rule, /usr/local/bin link
 func install() -> Bool {
-    let src = me.deletingLastPathComponent().path, user = ProcessInfo.processInfo.environment["SUDO_USER"] ?? NSUserName()
+    let user = ProcessInfo.processInfo.environment["SUDO_USER"] ?? NSUserName()
     let script = """
     set -e
     install -d -o root -g wheel -m 755 \(installDir) \(installDir)/sounds
@@ -395,7 +402,7 @@ func install() -> Bool {
       fi
     done
     rm -f \(installDir)/sounds/*
-    for f in '\(src)'/sounds/*; do  # skip symlinks: they could pull protected files into a world-readable place
+    for f in '\(soundsSource)'/*; do  # skip symlinks: they could pull protected files into a world-readable place
       if [ -f "$f" ] && [ ! -L "$f" ]; then install -o root -g wheel -m 644 "$f" \(installDir)/sounds/; fi
     done
     # pin the rule to this exact binary: sudo refuses anything else at that path
@@ -447,9 +454,11 @@ if demo {
 } else {
     // locking runs as the installed root-owned copy. First run, or after an update, set it up (one password prompt).
     if !test && getuid() != 0 {
-        if !FileManager.default.contentsEqual(atPath: installed, andPath: me.path) {
+        let fm = FileManager.default
+        let soundsChanged = fm.fileExists(atPath: soundsSource) && !fm.contentsEqual(atPath: soundsSource, andPath: installDir + "/sounds")
+        if !fm.contentsEqual(atPath: installed, andPath: me.path) || soundsChanged {
             print(FileManager.default.fileExists(atPath: installed)
-                  ? "keebclean changed, updating its password-free setup from \(me.path) (asks for your password once)..."
+                  ? "keebclean or your sounds changed, updating the password-free setup from \(me.path) (asks for your password once)..."
                   : "first run: setting up password-free locking from \(me.path) (asks for your password once)...")
             guard install() else { exit(1) }
         }
