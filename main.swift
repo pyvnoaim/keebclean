@@ -60,7 +60,8 @@ let FN = 0x1_0003  // fn/globe arrives on Apple vendor pages, give it one id
 let TP = 0x2_0000  // the trackpad, drawn under the keyboard and cleaned like a key
 
 // MacBook layout in key units, every row sums to 15.
-// Apple ISO hardware reports the key left of 1 as 0x64 and the key next to left shift as 0x35.
+// Apple ISO hardware reports the key left of 1 as 0x64, the key next to left shift as 0x35,
+// and the key left of return as 0x31 (other ISO boards send 0x32, folded into 0x31 on input).
 func layout(iso: Bool) -> [[Key]] {
     let fnRow = [k(0x29, 1.5, "esc")] + (1...12).map { k(0x39 + $0, 1, "F\($0)") } + [k(-1, 1.5, "◉")]
     let digits = "1234567890".enumerated().map { c(0x1E + $0.offset, String($0.element)) }
@@ -75,7 +76,7 @@ func layout(iso: Bool) -> [[Key]] {
             fnRow,
             [c(0x64, "§")] + digits + [c(0x2D, "-"), c(0x2E, "="), delete],
             [tab] + letters("qwertyuiop") + [c(0x2F, "["), c(0x30, "]"), Key(id: 0x28, units: 1.5, labels: ["⏎"], part: 1)],
-            [caps] + letters("asdfghjkl") + [c(0x33, ";"), c(0x34, "'"), c(0x32, "\\"), Key(id: 0x28, units: 1.25, labels: [""], part: 2)],
+            [caps] + letters("asdfghjkl") + [c(0x33, ";"), c(0x34, "'"), c(0x31, "\\"), Key(id: 0x28, units: 1.25, labels: [""], part: 2)],
             [k(0xE1, 1.25, "⇧ shift", "shift", "⇧"), c(0x35, "`")] + letters("zxcvbnm") + punct + [rshift],
             bottom,
         ]
@@ -607,7 +608,7 @@ if demo {
         let page = Int(IOHIDElementGetUsagePage(el)), usage = Int(IOHIDElementGetUsage(el))
         let id: Int
         switch page {
-        case 0x07 where (0x04...0xE7).contains(usage): id = usage
+        case 0x07 where (0x04...0xE7).contains(usage): id = usage == 0x32 ? 0x31 : usage
         case 0xFF where usage == 3, 0xFF00 where usage == 3: id = FN
         case 0x0C where usage != 0: id = 0x0C_0000 | usage
         default: return
