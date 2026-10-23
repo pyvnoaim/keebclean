@@ -446,8 +446,8 @@ if demo {
     if !test && getuid() != 0 {
         if !FileManager.default.contentsEqual(atPath: installed, andPath: me.path) {
             print(FileManager.default.fileExists(atPath: installed)
-                  ? "keebclean changed, updating its password-free setup (asks for your password once)..."
-                  : "first run: setting up password-free locking (asks for your password once)...")
+                  ? "keebclean changed, updating its password-free setup from \(me.path) (asks for your password once)..."
+                  : "first run: setting up password-free locking from \(me.path) (asks for your password once)...")
             guard install() else { exit(1) }
         }
         reexecAsRoot()
