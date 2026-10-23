@@ -259,31 +259,25 @@ func draw() {
     out.append("")
     out += cap(Key(id: TP, units: 6, labels: ["trackpad"]), tpW, u, now).map { rep(" ", (width - tpW) / 2) + $0 }
 
-    // full-width bar, then the numbers, then what to type; the device list sits dim at the bottom
-    let count = fg(bright) + B + "\(cleaned.count)" + R + fg(muted) + "/\(lockable.count) cleaned" + R
-    let barW = width - vis(count) - 2
-    let done = cleaned.count * barW / lockable.count
+    // one centered column under the trackpad: progress, numbers, then what to type.
+    // Devices only show when one couldn't be locked.
+    func center(_ s: String) -> String { rep(" ", (width - vis(s)) / 2) + s }
+    let done = cleaned.count * tpW / lockable.count
     out.append("")
-    out.append(fg(accent) + rep("━", done) + fg(ghost) + rep("━", barW - done) + R + "  " + count)
-    var timer = ""
+    out.append(center(fg(bright) + B + "\(cleaned.count)" + R + fg(muted) + " of \(lockable.count) keys cleaned" + R))
+    out.append(center(fg(accent) + rep("━", done) + fg(ghost) + rep("━", tpW - done) + R))
+    var stats = fg(bright) + "\(presses)" + fg(muted) + " presses · last " + fg(bright) + last
     if let d = deadline, !demo {
         let left = max(0, Int(d.timeIntervalSince(now).rounded(.up)))
-        timer = fg(muted) + "auto-unlock " + fg(bright) + String(format: "%d:%02d", left / 60, left % 60) + R
+        stats += fg(muted) + " · auto-unlock " + fg(bright) + String(format: "%d:%02d", left / 60, left % 60)
     }
-    out.append(spread(fg(bright) + "\(presses)" + fg(muted) + " presses · last " + fg(bright) + last + R, timer, width))
-    if !unlockedNames.isEmpty { out.append(fg(bright) + "not locked  " + unlockedNames.joined(separator: ", ") + R) }
+    out.append(center(stats + R))
+    if !unlockedNames.isEmpty { out.append(center(fg(bright) + "not locked  " + unlockedNames.joined(separator: ", ") + R)) }
 
-    out.append("")
-    let unlockHint = fg(muted) + "type " + typedWord("unlock", unlockSeq) + fg(muted) + " to unlock" + R
+    out += ["", ""]
+    out.append(center(fg(muted) + "type " + typedWord("unlock", unlockSeq) + fg(muted) + " to unlock" + R))
     if let v = updateAvailable {
-        let updateHint = fg(muted) + "v\(v) available · type " + typedWord("update", updateSeq) + fg(muted) + " to update" + R
-        out.append(spread(unlockHint, updateHint, width))
-    } else {
-        out.append(unlockHint)
-    }
-    if !demo {
-        let devices = (test ? "watching " : "locked ") + lockedNames.joined(separator: " · ")
-        out.append(fg(dimBorder) + String(devices.prefix(width)) + R)
+        out.append(center(fg(dimBorder) + "v\(v) available · type " + typedWord("update", updateSeq) + fg(dimBorder) + " to update" + R))
     }
 
     let topPad = max(0, (lines - out.count) / 2), padN = max(0, (cols - width) / 2)
