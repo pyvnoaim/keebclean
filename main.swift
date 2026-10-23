@@ -200,14 +200,13 @@ func cap(_ key: Key, _ w: Int, _ u: Double, _ now: Date) -> [String] {
         return fill + rep(" ", l) + text + rep(" ", n - text.count - l) + R + paint
     }
     let top = paint + tl + rep(th, inner) + tr + R, bottom = paint + bl + rep(bh, inner) + br + R
-    if let d {  // ↑ and ↓ share one cap, each arrow lit on its own
-        func arrow(_ a: String, _ st: (border: RGB, label: RGB, held: Bool)) -> String {
-            (st.held ? bg(accent) + fg(dark) + B : fg(st.label)) + a + R + paint
+    if let d {  // ↑ and ↓ stacked like on a MacBook: arrows sit in the top and bottom edges, each lit on its own
+        func edge(_ a: String, _ st: (border: RGB, label: RGB, held: Bool), _ l: String, _ h: String, _ r: String) -> String {
+            let p = fg(st.border), gap = inner >= 5 ? " " : "", rest = inner - 1 - 2 * gap.count, n = rest / 2
+            return p + l + rep(h, n) + gap + (st.held ? bg(accent) + fg(dark) + B : fg(st.label)) + a + R + p + gap
+                + rep(h, rest - n) + r + R
         }
-        let gap = inner >= 3 ? " " : ""
-        let l = (inner - 2 - gap.count) / 2
-        let body = rep(" ", l) + arrow("↑", up) + gap + arrow("↓", d) + rep(" ", inner - 2 - gap.count - l)
-        return [top, paint + "│" + body + "│" + R, bottom]
+        return [edge("↑", up, "╭", "─", "╮"), paint + "├" + rep("─", inner) + "┤" + R, edge("↓", d, "┕", "━", "┙")]
     }
     let label = fit(key.labels, inner)
     switch key.part {
