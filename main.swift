@@ -210,10 +210,10 @@ func cap(_ key: Key, _ w: Int, _ u: Double, _ now: Date) -> [String] {
 func vis(_ s: String) -> Int { s.replacingOccurrences(of: "\u{1B}\\[[0-9;?]*[a-zA-Z]", with: "", options: .regularExpression).count }
 func spread(_ l: String, _ r: String, _ w: Int) -> String { l + rep(" ", w - vis(l) - vis(r)) + r }
 
-// typed letters look like a held key (white block, dark text), the rest stays plain
+// letters start grey like the text around them and turn white as you type them
 func typedWord(_ word: String, _ seq: [Int]) -> String {
     let m = (0...seq.count).last { typedKeys.suffix($0).elementsEqual(seq.prefix($0)) } ?? 0
-    return word.enumerated().map { ($0.offset < m ? bg(accent) + fg(dark) + B : fg(bright)) + String($0.element) + R }.joined()
+    return word.enumerated().map { ($0.offset < m ? fg(flash) + B : fg(muted)) + String($0.element) + R }.joined()
 }
 
 var lastDraw = Date.distantPast
