@@ -103,7 +103,14 @@ let args = CommandLine.arguments
 let demo = args.contains("--demo")
 let test = args.contains("--test")  // listen without seizing, keys still reach macOS
 let screenMode = args.contains("--screen")
+// the sudo rule lets anything running as you start keebclean as root without a password, so as root only
+// the lock itself is allowed: test mode would be a keylogger that skips Input Monitoring, and the timeout is capped
+let viaSudo = getuid() == 0 && ProcessInfo.processInfo.environment["SUDO_USER"] != nil
+if viaSudo, let bad = ["--test", "--install", "--uninstall"].first(where: args.contains) {
+    print("\(bad) can't run through sudo, run keebclean \(bad) as yourself"); exit(1)
+}
 let timeoutArg = args.firstIndex(of: "--timeout").flatMap { $0 + 1 < args.count ? Double(args[$0 + 1]) : nil }
+    .map { viaSudo ? min($0, 30 * 60) : $0 }
 // safety net: typing "unlock" is the only way out, so a real lock always ends eventually
 var deadline: Date? = (timeoutArg ?? (demo || test ? nil : 15 * 60)).map { Date().addingTimeInterval($0) }
 var down = Set<Int>(), cleaned = Set<Int>(), lastPress = [Int: Date](), pressCount = [Int: Int]()
@@ -373,10 +380,20 @@ if args.contains("--install") {
     set -e
     install -d -o root -g wheel -m 755 \(installDir) \(installDir)/sounds
     install -o root -g wheel -m 755 '\(me.path)' \(installed)
+    # every folder on the way must be root-owned and writable only by root, or the binary could be swapped
+    for d in / /usr /usr/local /usr/local/libexec \(installDir); do
+      if [ "$(stat -f %u "$d")" != 0 ] || [ $(( 0$(stat -f %Lp "$d") & 022 )) != 0 ]; then
+        echo "refusing: $d is not root-owned or is writable by others" >&2; exit 1
+      fi
+    done
     rm -f \(installDir)/sounds/*
-    for f in '\(src)'/sounds/*; do if [ -f "$f" ]; then install -o root -g wheel -m 644 "$f" \(installDir)/sounds/; fi; done
+    for f in '\(src)'/sounds/*; do  # skip symlinks: they could pull protected files into a world-readable place
+      if [ -f "$f" ] && [ ! -L "$f" ]; then install -o root -g wheel -m 644 "$f" \(installDir)/sounds/; fi
+    done
+    # pin the rule to this exact binary: sudo refuses anything else at that path
+    h=$(openssl dgst -sha256 -binary \(installed) | base64)
     t=$(mktemp)
-    echo '\(user) ALL=(root) NOPASSWD: \(installed)' > "$t"
+    echo "\(user) ALL=(root) NOPASSWD: sha256:$h \(installed)" > "$t"
     visudo -cf "$t" >/dev/null
     install -o root -g wheel -m 440 "$t" /etc/sudoers.d/keebclean
     rm -f "$t"
