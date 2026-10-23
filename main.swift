@@ -259,18 +259,18 @@ func draw() {
     out.append("")
     out += cap(Key(id: TP, units: 6, labels: ["trackpad"]), tpW, u, now).map { rep(" ", (width - tpW) / 2) + $0 }
 
-    var stats = fg(bright) + "\(presses)" + fg(muted) + " presses   last " + fg(bright) + last
-    if let d = deadline, !demo {
-        let left = max(0, Int(d.timeIntervalSince(now).rounded(.up)))
-        stats += fg(muted) + "   auto-unlock " + fg(bright) + String(format: "%d:%02d", left / 60, left % 60)
-    }
-    stats += R
-    let count = "  " + fg(bright) + B + "\(cleaned.count)" + R + fg(muted) + "/\(lockable.count)" + R
-    let barW = max(8, width - vis(stats) - vis(count) - 12)
+    // full-width bar, then the numbers, then what to type; the device list sits dim at the bottom
+    let count = fg(bright) + B + "\(cleaned.count)" + R + fg(muted) + "/\(lockable.count) cleaned" + R
+    let barW = width - vis(count) - 2
     let done = cleaned.count * barW / lockable.count
     out.append("")
-    out.append(spread(fg(muted) + "cleaned  " + fg(accent) + rep("━", done) + fg(ghost) + rep("━", barW - done) + R + count, stats, width))
-    if !demo { out.append(fg(muted) + (test ? "watching " : "locked   ") + lockedNames.joined(separator: ", ") + R) }
+    out.append(fg(accent) + rep("━", done) + fg(ghost) + rep("━", barW - done) + R + "  " + count)
+    var timer = ""
+    if let d = deadline, !demo {
+        let left = max(0, Int(d.timeIntervalSince(now).rounded(.up)))
+        timer = fg(muted) + "auto-unlock " + fg(bright) + String(format: "%d:%02d", left / 60, left % 60) + R
+    }
+    out.append(spread(fg(bright) + "\(presses)" + fg(muted) + " presses · last " + fg(bright) + last + R, timer, width))
     if !unlockedNames.isEmpty { out.append(fg(bright) + "not locked  " + unlockedNames.joined(separator: ", ") + R) }
 
     out.append("")
@@ -280,6 +280,10 @@ func draw() {
         out.append(spread(unlockHint, updateHint, width))
     } else {
         out.append(unlockHint)
+    }
+    if !demo {
+        let devices = (test ? "watching " : "locked ") + lockedNames.joined(separator: " · ")
+        out.append(fg(dimBorder) + String(devices.prefix(width)) + R)
     }
 
     let topPad = max(0, (lines - out.count) / 2), padN = max(0, (cols - width) / 2)
@@ -634,8 +638,7 @@ if demo {
         finish("could not \(test ? "read" : "lock") any keyboard: \(unlockedNames.isEmpty ? "none found" : unlockedNames.joined(separator: ", "))"
                + (test ? ", allow your terminal in Settings > Privacy & Security > Input Monitoring" : ""), 1)
     }
-    if startPointerTap() { lockedNames.append("trackpad") }
-    else { unlockedNames.append("trackpad (allow your terminal in Settings > Privacy & Security > Accessibility)") }
+    if !startPointerTap() { unlockedNames.append("trackpad (allow your terminal in Settings > Privacy & Security > Accessibility)") }
 }
 
 if !args.contains("--mute") { makeSounds() }
