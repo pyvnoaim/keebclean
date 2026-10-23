@@ -28,18 +28,27 @@ jobs:
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" keebclean-*.tar.gz checksums.txt --title "$GITHUB_REF_NAME" --generate-notes
+        run: |  # re-running a failed job replaces the assets instead of failing on the existing release
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" keebclean-*.tar.gz checksums.txt --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" keebclean-*.tar.gz checksums.txt --title "$GITHUB_REF_NAME" --generate-notes
+          fi
       - name: Update Homebrew tap
         env:
           TAP_KEY: ${{ secrets.TAP_DEPLOY_KEY }}
         run: |
+          [ -n "$TAP_KEY" ] || { echo "TAP_DEPLOY_KEY secret is missing" >&2; exit 1; }
           mkdir -p ~/.ssh && printf '%s\n' "$TAP_KEY" > ~/.ssh/tap && chmod 600 ~/.ssh/tap
-          export GIT_SSH_COMMAND="ssh -i $HOME/.ssh/tap -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+          # GitHub's published host key (api.github.com/meta), pinned instead of trusted on first use
+          echo "github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl" > ~/.ssh/known_hosts_github
+          export GIT_SSH_COMMAND="ssh -i $HOME/.ssh/tap -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$HOME/.ssh/known_hosts_github"
           src="https://github.com/$GITHUB_REPOSITORY/archive/refs/tags/$GITHUB_REF_NAME.tar.gz"
           sha=$(curl -fsSL "$src" | shasum -a 256 | cut -d' ' -f1)
           git clone -q git@github.com:pyvnoaim/homebrew-tap.git tap
           cd tap
           sed -i '' -E "s|^  url \".*\"|  url \"$src\"|; s|^  sha256 \".*\"|  sha256 \"$sha\"|" Formula/keebclean.rb
+          if git diff --quiet; then echo "formula already up to date"; exit 0; fi
           git -c user.name="github-actions[bot]" -c user.email="41898299+github-actions[bot]@users.noreply.github.com" \
             commit -qam "keebclean ${GITHUB_REF_NAME#v}"
           git push -q

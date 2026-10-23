@@ -96,7 +96,9 @@ Trim the silence at the start of each file, or presses will feel delayed. Withou
 
 ## Security
 
-The sudo rule means any program running as you can start keebclean as root without a password. So when it runs through sudo, keebclean only allows the lock itself: `--test`, `--install` and `--uninstall` are refused (test mode would otherwise be a keylogger that skips the Input Monitoring prompt), and `--timeout` is capped at 30 minutes.
+The sudo rule means any program running as you can start keebclean as root without a password. So when it runs through sudo, keebclean only allows the lock itself: `--test`, `--install` and `--uninstall` are refused (test mode would otherwise be a keylogger that skips the Input Monitoring prompt), it only runs attached to a terminal, and `--timeout` is capped at 30 minutes.
+
+What remains, and is the price of password-free locking: a program already running as you could start a lock inside a terminal it creates itself. While a lock runs your keyboard does nothing anywhere else, so you would notice at once and nothing you type can be captured from other apps; the worst case is being locked out for up to 30 minutes. `keebclean --uninstall` removes the sudo rule; the next lock sets it up again.
 
 ## Limitations
 

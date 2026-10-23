@@ -116,13 +116,15 @@ if viaSudo && (isatty(STDIN_FILENO) == 0 || isatty(STDOUT_FILENO) == 0) {  // re
     print("keebclean only runs as root in a terminal"); exit(1)
 }
 let timeoutArg = args.firstIndex(of: "--timeout").flatMap { $0 + 1 < args.count ? Double(args[$0 + 1]) : nil }
-    .map { viaSudo ? min($0, 30 * 60) : $0 }
+    .flatMap { $0.isFinite && $0 > 0 ? $0 : nil }  // "nan" or "inf" would never time out
+    .map { min($0, viaSudo ? 30 * 60 : 24 * 3600) }
 // safety net: typing "unlock" is the only way out, so a real lock always ends eventually
 var deadline: Date? = (timeoutArg ?? (demo || test ? nil : 15 * 60)).map { Date().addingTimeInterval($0) }
 var down = Set<Int>(), cleaned = Set<Int>(), lastPress = [Int: Date](), pressCount = [Int: Int]()
 var presses = 0, last = "-", typedKeys = [Int]()
 var seized: [IOHIDDevice] = [], lockedNames: [String] = [], unlockedNames: [String] = []
-var origTerm = termios()
+var origTerm = termios(), uiActive = false
+let haveTerm = tcgetattr(STDIN_FILENO, &origTerm) == 0  // saved before anything can fail or be interrupted
 
 // MARK: drawing
 typealias RGB = (Int, Int, Int)
@@ -253,9 +255,10 @@ func draw() {
 // MARK: input
 func restoreTerm() {
     CGAssociateMouseAndMouseCursorPosition(1)
+    guard uiActive else { return }  // nothing changed yet, e.g. Ctrl+C at the password prompt
     var t = origTerm
     tcflush(STDIN_FILENO, TCIFLUSH)  // test mode: don't hand what you typed to the shell
-    tcsetattr(STDIN_FILENO, TCSANOW, &t)
+    if haveTerm { tcsetattr(STDIN_FILENO, TCSANOW, &t) }
     print("\u{1B}[?25h\u{1B}[?1049l", terminator: "")
     fflush(stdout)
 }
@@ -371,14 +374,20 @@ func blackOut() {
 let installDir = "/Library/PrivilegedHelperTools/keebclean", installed = installDir + "/keebclean"
 let me = URL(fileURLWithPath: Bundle.main.executablePath ?? args[0]).resolvingSymlinksInPath()
 
+// posix_spawn, not Process: Process puts the child in its own process group, and sudo then gets
+// stopped (SIGTTIN) the moment it reads your password from the terminal
 func sudo(_ a: [String], quiet: Bool = false) -> Bool {
-    let p = Process()
-    p.executableURL = URL(fileURLWithPath: "/usr/bin/sudo")
-    p.arguments = a
-    if quiet { p.standardOutput = FileHandle.nullDevice; p.standardError = FileHandle.nullDevice }
-    guard (try? p.run()) != nil else { return false }
-    p.waitUntilExit()
-    return p.terminationStatus == 0
+    var fa: posix_spawn_file_actions_t?
+    posix_spawn_file_actions_init(&fa)
+    defer { posix_spawn_file_actions_destroy(&fa) }
+    if quiet { for fd in [STDOUT_FILENO, STDERR_FILENO] { posix_spawn_file_actions_addopen(&fa, fd, "/dev/null", O_WRONLY, 0) } }
+    var argv = (["sudo"] + a).map { strdup($0) } + [nil]
+    defer { argv.forEach { free($0) } }
+    var pid: pid_t = 0
+    guard posix_spawn(&pid, "/usr/bin/sudo", &fa, nil, &argv, environ) == 0 else { return false }
+    var status: Int32 = 0
+    while waitpid(pid, &status, 0) == -1 && errno == EINTR {}
+    return status == 0
 }
 
 // your sounds live in ~/.config/keebclean/sounds so they survive updates; a sounds folder next to the binary
@@ -388,40 +397,49 @@ let soundsSource: String = {
     return FileManager.default.fileExists(atPath: personal) ? personal : me.deletingLastPathComponent().appendingPathComponent("sounds").path
 }()
 
+// exactly what setup copies (audio files, by name), so a .DS_Store or a README can't trigger a password prompt every run
+func audioFiles(_ dir: String) -> [String: Data] {
+    let names = (try? FileManager.default.contentsOfDirectory(atPath: dir)) ?? []
+    return Dictionary(uniqueKeysWithValues: names
+        .filter { ["wav", "aif", "aiff", "caf"].contains(($0 as NSString).pathExtension.lowercased()) }
+        .compactMap { n in FileManager.default.contents(atPath: dir + "/" + n).map { (n, $0) } })
+}
+
 // one password prompt: root-owned copy, hash-pinned sudo rule, /usr/local/bin link
 func install() -> Bool {
     let user = ProcessInfo.processInfo.environment["SUDO_USER"] ?? NSUserName()
+    // paths and user arrive as $1 $2 $3, never pasted into the script, so a quote in a path can't inject commands
     let script = """
     set -e
     install -d -o root -g wheel -m 755 \(installDir) \(installDir)/sounds
-    install -o root -g wheel -m 755 '\(me.path)' \(installed)
     # every folder on the way must be root-owned and writable only by root, or the binary could be swapped
     for d in / /Library /Library/PrivilegedHelperTools \(installDir); do
       if [ "$(stat -f %u "$d")" != 0 ] || [ $(( 0$(stat -f %Lp "$d") & 022 )) != 0 ]; then
         echo "refusing: $d is not root-owned or is writable by others" >&2; exit 1
       fi
     done
+    install -o root -g wheel -m 755 "$1" \(installed)
     rm -f \(installDir)/sounds/*
     # read sounds as you, not as root: a symlinked folder or file can't pull in anything you couldn't read yourself
-    for f in '\(soundsSource)'/*; do
+    for f in "$2"/*; do
       case "$f" in *.wav|*.aif|*.aiff|*.caf) ;; *) continue ;; esac
       [ -f "$f" ] || continue
       n=$(basename "$f")
-      sudo -u '\(user)' /bin/cat "$f" > "\(installDir)/sounds/$n"
+      sudo -u "$3" /bin/cat "$f" > "\(installDir)/sounds/$n"
       chmod 644 "\(installDir)/sounds/$n"
     done
     # pin the rule to this exact binary: sudo refuses anything else at that path
     h=$(openssl dgst -sha256 -binary \(installed) | base64)
     t=$(mktemp)
-    echo "\(user) ALL=(root) NOPASSWD: sha256:$h \(installed)" > "$t"
+    echo "$3 ALL=(root) NOPASSWD: sha256:$h \(installed)" > "$t"
     visudo -cf "$t" >/dev/null
     install -o root -g wheel -m 440 "$t" /etc/sudoers.d/keebclean
     rm -f "$t"
     # put keebclean on PATH, without touching a link Homebrew already made
     install -d -m 755 /usr/local/bin
-    [ -e /usr/local/bin/keebclean ] || ln -s \(installed) /usr/local/bin/keebclean
+    [ -e /usr/local/bin/keebclean ] || [ -L /usr/local/bin/keebclean ] || ln -s \(installed) /usr/local/bin/keebclean
     """
-    guard sudo(["/bin/sh", "-c", script]) else { print("setup failed, nothing changed in sudo"); return false }
+    guard sudo(["/bin/sh", "-c", script, "keebclean-setup", me.path, soundsSource, user]) else { print("setup failed, see the error above; keebclean --uninstall cleans up"); return false }
     let ok = sudo(["-n", "-l", installed], quiet: true)
     print(ok ? "set up: keebclean now locks without a password"
              : "set up, but sudo still asks for a password: /etc/sudoers.d may not be read on this Mac")
@@ -449,6 +467,16 @@ if demo {
     // ponytail: demo doubles as the self-check, random presses then "unlock"; nonzero exit = something broke
     precondition([true, false].allSatisfy { layout(iso: $0).allSatisfy { $0.reduce(0) { $0 + $1.units } == 15 } },
                  "a row doesn't sum to 15 units")
+    do {  // the sound-change check must ignore everything setup doesn't copy, or every lock asks for a password
+        let tmp = NSTemporaryDirectory() + "keebclean-check-\(getpid())", fm = FileManager.default
+        for d in ["a", "b"] { try fm.createDirectory(atPath: "\(tmp)/\(d)", withIntermediateDirectories: true) }
+        for d in ["a", "b"] { fm.createFile(atPath: "\(tmp)/\(d)/press-generic1.wav", contents: Data([1, 2, 3])) }
+        fm.createFile(atPath: "\(tmp)/a/.DS_Store", contents: Data([9]))
+        precondition(audioFiles("\(tmp)/a") == audioFiles("\(tmp)/b"), "non-audio files count as changed sounds")
+        fm.createFile(atPath: "\(tmp)/b/press-generic1.wav", contents: Data([4]))
+        precondition(audioFiles("\(tmp)/a") != audioFiles("\(tmp)/b"), "changed sounds not noticed")
+        try fm.removeItem(atPath: tmp)
+    } catch { preconditionFailure("sound check setup: \(error)") }
     let all = Array(lockable)
     var script = (0..<60).flatMap { _ -> [(Int, Bool)] in let k = all.randomElement()!; return [(k, true), (k, false)] }
     script += unlockSeq.flatMap { [($0, true), ($0, false)] }
@@ -462,7 +490,7 @@ if demo {
     // locking runs as the installed root-owned copy. First run, or after an update, set it up (one password prompt).
     if !test && getuid() != 0 {
         let fm = FileManager.default
-        let soundsChanged = fm.fileExists(atPath: soundsSource) && !fm.contentsEqual(atPath: soundsSource, andPath: installDir + "/sounds")
+        let soundsChanged = audioFiles(soundsSource) != audioFiles(installDir + "/sounds")
         if !fm.contentsEqual(atPath: installed, andPath: me.path) || soundsChanged {
             print(FileManager.default.fileExists(atPath: installed)
                   ? "keebclean or your sounds changed, updating the password-free setup from \(me.path) (asks for your password once)..."
@@ -516,10 +544,10 @@ if demo {
 }
 
 if !args.contains("--mute") { makeSounds() }
-tcgetattr(STDIN_FILENO, &origTerm)
 var raw = origTerm
 raw.c_lflag &= ~tcflag_t(ICANON | ECHO)
-tcsetattr(STDIN_FILENO, TCSANOW, &raw)
+if haveTerm { tcsetattr(STDIN_FILENO, TCSANOW, &raw) }
+uiActive = true
 print("\u{1B}[?1049h\u{1B}[?25l", terminator: "")  // alternate screen, hidden cursor
 // 30 fps while a key is fading out, otherwise just tick the countdown
 Timer.scheduledTimer(withTimeInterval: 1.0 / 30, repeats: true) { _ in
