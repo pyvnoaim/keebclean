@@ -93,7 +93,12 @@ func layout(iso: Bool) -> [[Key]] {
 let rows = layout(iso: KBGetLayoutType(Int16(LMGetKbdType())) == kKeyboardISO)
 var names = Dictionary(rows.joined().map { ($0.id, $0.labels.last!) }, uniquingKeysWith: { a, _ in a })
 names[0x2C] = "space"; names[0x51] = "↓"; names[0x28] = "⏎"; names[TP] = "trackpad"
-let lockable = Set(rows.joined().flatMap { [$0.id] + ($0.below.map { [$0] } ?? []) }.filter { $0 >= 0 } + [TP])
+var lockableIDs: [Int] = [TP]  // typed out: the one-line version took over half a second to type-check
+for key in rows.joined() where key.id >= 0 {
+    lockableIDs.append(key.id)
+    if let b = key.below { lockableIDs.append(b) }
+}
+let lockable = Set(lockableIDs)
 // "unlock" by what the keys type in your layout, not by US position
 let unlockSeq = "unlock".map { ch in
     rows.joined().first { vk[$0.id] != nil && $0.labels[0].lowercased() == String(ch) }?.id ?? Int(ch.asciiValue! - 97) + 0x04
@@ -115,9 +120,13 @@ if viaSudo, let bad = ["--test", "--install", "--uninstall"].first(where: args.c
 if viaSudo && (isatty(STDIN_FILENO) == 0 || isatty(STDOUT_FILENO) == 0) {  // redirected output would log every key
     print("keebclean only runs as root in a terminal"); exit(1)
 }
-let timeoutArg = args.firstIndex(of: "--timeout").flatMap { $0 + 1 < args.count ? Double(args[$0 + 1]) : nil }
-    .flatMap { $0.isFinite && $0 > 0 ? $0 : nil }  // "nan" or "inf" would never time out
-    .map { min($0, viaSudo ? 30 * 60 : 24 * 3600) }
+// spelled out step by step: a single chained expression here is too slow for some compilers to type-check
+var timeoutArg: Double? = nil
+if let i = args.firstIndex(of: "--timeout"), i + 1 < args.count, let t = Double(args[i + 1]),
+   t.isFinite, t > 0 {  // "nan" or "inf" would never time out
+    let cap: Double = viaSudo ? 30 * 60 : 24 * 3600
+    timeoutArg = min(t, cap)
+}
 // safety net: typing "unlock" is the only way out, so a real lock always ends eventually
 var deadline: Date? = (timeoutArg ?? (demo || test ? nil : 15 * 60)).map { Date().addingTimeInterval($0) }
 var down = Set<Int>(), cleaned = Set<Int>(), lastPress = [Int: Date](), pressCount = [Int: Int]()
