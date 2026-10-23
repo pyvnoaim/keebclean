@@ -29,12 +29,6 @@ Most keyboard cleaning apps filter key events after macOS has already seen them,
 ## Install
 
 ```sh
-brew install pyvnoaim/tap/keebclean
-```
-
-or, without Homebrew:
-
-```sh
 curl -fsSL https://raw.githubusercontent.com/pyvnoaim/keebclean/main/install.sh | sh
 ```
 
@@ -62,7 +56,7 @@ keebclean --mute           # no switch sounds
 keebclean --version
 ```
 
-When a newer release is out, the lock screen says so: type `update` (like `unlock`) and keebclean unlocks and updates itself, with Homebrew or the install script, whichever you installed with. You can also update yourself with `brew upgrade keebclean`, or by running the install script again.
+When a newer release is out, the lock screen says so: type `update` (like `unlock`) and keebclean unlocks and updates itself. You can also update by running the install script again.
 
 To find out, keebclean asks GitHub for the latest release at most once a day, as you and never as root, and gives up after 2 seconds. Set `KEEBCLEAN_NO_UPDATE_CHECK=1` to turn that off.
 
@@ -113,7 +107,7 @@ What remains, and is the price of password-free locking: a program already runni
 git tag v1.2.3 && git push origin v1.2.3
 ```
 
-The release workflow stamps the version, builds the universal binary, publishes the GitHub release and updates the Homebrew formula in [pyvnoaim/homebrew-tap](https://github.com/pyvnoaim/homebrew-tap).
+The release workflow stamps the version, builds the universal binary and publishes the GitHub release.
 
 ## License
 
