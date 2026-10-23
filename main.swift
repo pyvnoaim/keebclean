@@ -111,7 +111,7 @@ let unlockSeq = keySeq("unlock"), updateSeq = keySeq("update")
 let version = "dev"  // release builds stamp the tag in here
 let args = CommandLine.arguments
 if args.contains("--version") { print("keebclean \(version)"); exit(0) }
-// unknown options must never fall through to a lock: "keebclean --testbrew" (a typo) used to lock the keyboard
+// unknown options must never fall through to a lock: "keebclean --tset" (a typo) used to lock the keyboard
 let usage = """
 usage: keebclean [--timeout SECONDS] [--screen] [--mute]   lock keyboard and trackpad, type "unlock" to end
        keebclean --test | --demo                          preview without locking

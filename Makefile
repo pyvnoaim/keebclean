@@ -5,7 +5,7 @@ keebclean: main.swift
 test: keebclean
 	./keebclean --demo --mute < /dev/null > /dev/null
 	# a typo must never lock the keyboard
-	./keebclean --testbrew > /dev/null; test $$? -eq 2
+	./keebclean --tset > /dev/null; test $$? -eq 2
 
 install: keebclean
 	./keebclean --install
