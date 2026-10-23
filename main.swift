@@ -7,7 +7,7 @@
 // run:    keebclean [--timeout 60] [--mute]   (asks for sudo itself if macOS needs it)
 //         blocks keyboard and trackpad/mouse; unlock: type "unlock" (auto-unlocks after 15 min by default)
 //         --screen   also black out every display, to clean the screen
-// setup:  keebclean --install                 (one password prompt, then locking never asks again)
+// setup:  automatic on the first lock and after updates (one password prompt each), or keebclean --install
 //         keebclean --uninstall
 // test:   keebclean --test                    (real presses shown, nothing locked: for screenshots)
 // demo:   keebclean --demo                    (no lock, simulated presses; exits 0 if unlock works)
@@ -108,6 +108,9 @@ let screenMode = args.contains("--screen")
 let viaSudo = getuid() == 0 && ProcessInfo.processInfo.environment["SUDO_USER"] != nil
 if viaSudo, let bad = ["--test", "--install", "--uninstall"].first(where: args.contains) {
     print("\(bad) can't run through sudo, run keebclean \(bad) as yourself"); exit(1)
+}
+if viaSudo && (isatty(STDIN_FILENO) == 0 || isatty(STDOUT_FILENO) == 0) {  // redirected output would log every key
+    print("keebclean only runs as root in a terminal"); exit(1)
 }
 let timeoutArg = args.firstIndex(of: "--timeout").flatMap { $0 + 1 < args.count ? Double(args[$0 + 1]) : nil }
     .map { viaSudo ? min($0, 30 * 60) : $0 }
@@ -361,7 +364,8 @@ func blackOut() {
 
 // password-free locking: a root-owned copy plus a sudo rule for exactly that file.
 // Root-owned so nothing running as you can swap the binary and get root through the rule.
-let installDir = "/usr/local/libexec/keebclean", installed = installDir + "/keebclean"
+// /Library/PrivilegedHelperTools is root-owned on every Mac; /usr/local isn't on Intel Macs with Homebrew
+let installDir = "/Library/PrivilegedHelperTools/keebclean", installed = installDir + "/keebclean"
 let me = URL(fileURLWithPath: Bundle.main.executablePath ?? args[0]).resolvingSymlinksInPath()
 
 func sudo(_ a: [String], quiet: Bool = false) -> Bool {
@@ -374,14 +378,15 @@ func sudo(_ a: [String], quiet: Bool = false) -> Bool {
     return p.terminationStatus == 0
 }
 
-if args.contains("--install") {
+// one password prompt: root-owned copy, hash-pinned sudo rule, /usr/local/bin link
+func install() -> Bool {
     let src = me.deletingLastPathComponent().path, user = ProcessInfo.processInfo.environment["SUDO_USER"] ?? NSUserName()
     let script = """
     set -e
     install -d -o root -g wheel -m 755 \(installDir) \(installDir)/sounds
     install -o root -g wheel -m 755 '\(me.path)' \(installed)
     # every folder on the way must be root-owned and writable only by root, or the binary could be swapped
-    for d in / /usr /usr/local /usr/local/libexec \(installDir); do
+    for d in / /Library /Library/PrivilegedHelperTools \(installDir); do
       if [ "$(stat -f %u "$d")" != 0 ] || [ $(( 0$(stat -f %Lp "$d") & 022 )) != 0 ]; then
         echo "refusing: $d is not root-owned or is writable by others" >&2; exit 1
       fi
@@ -397,15 +402,17 @@ if args.contains("--install") {
     visudo -cf "$t" >/dev/null
     install -o root -g wheel -m 440 "$t" /etc/sudoers.d/keebclean
     rm -f "$t"
+    # put keebclean on PATH, without touching a link Homebrew already made
     install -d -m 755 /usr/local/bin
-    ln -sf \(installed) /usr/local/bin/keebclean
+    [ -e /usr/local/bin/keebclean ] || ln -s \(installed) /usr/local/bin/keebclean
     """
-    guard sudo(["/bin/sh", "-c", script]) else { print("install failed, nothing changed in sudo"); exit(1) }
+    guard sudo(["/bin/sh", "-c", script]) else { print("setup failed, nothing changed in sudo"); return false }
     let ok = sudo(["-n", "-l", installed], quiet: true)
-    print(ok ? "installed: keebclean now locks without a password (run --install again after rebuilding)"
-             : "installed, but sudo still asks for a password: /etc/sudoers.d may not be read on this Mac")
-    exit(ok ? 0 : 1)
+    print(ok ? "set up: keebclean now locks without a password"
+             : "set up, but sudo still asks for a password: /etc/sudoers.d may not be read on this Mac")
+    return ok
 }
+if args.contains("--install") { exit(install() ? 0 : 1) }
 if args.contains("--uninstall") {
     let link = "/usr/local/bin/keebclean"  // only remove the link if it's ours
     let ok = sudo(["/bin/sh", "-c", "rm -f /etc/sudoers.d/keebclean && rm -rf \(installDir) && "
@@ -415,8 +422,7 @@ if args.contains("--uninstall") {
 }
 
 func reexecAsRoot() -> Never {
-    let target = FileManager.default.isExecutableFile(atPath: installed) ? installed : me.path
-    var cargs = (["sudo", target] + args.dropFirst()).map { strdup($0) } + [nil]
+    var cargs = (["sudo", installed] + args.dropFirst()).map { strdup($0) } + [nil]
     execv("/usr/bin/sudo", &cargs)
     print("could not run sudo"); exit(1)
 }
@@ -436,7 +442,16 @@ if demo {
         if !script.isEmpty { let (k, d) = script.removeFirst(); handle(k, d) }
     }
 } else {
-    if !test && getuid() != 0 && FileManager.default.isExecutableFile(atPath: installed) { reexecAsRoot() }  // no prompt
+    // locking runs as the installed root-owned copy. First run, or after an update, set it up (one password prompt).
+    if !test && getuid() != 0 {
+        if !FileManager.default.contentsEqual(atPath: installed, andPath: me.path) {
+            print(FileManager.default.fileExists(atPath: installed)
+                  ? "keebclean changed, updating its password-free setup (asks for your password once)..."
+                  : "first run: setting up password-free locking (asks for your password once)...")
+            guard install() else { exit(1) }
+        }
+        reexecAsRoot()
+    }
     if !test {
         print("hands off the keyboard, locking in 1s...")
         Thread.sleep(forTimeInterval: 1)
@@ -470,11 +485,6 @@ if demo {
         IOHIDDeviceScheduleWithRunLoop(dev, CFRunLoopGetCurrent(), CFRunLoopMode.defaultMode.rawValue)
         seized.append(dev)
         if keyboard && !lockedNames.contains(name) { lockedNames.append(name) }
-    }
-    if !test && getuid() != 0 && failed.contains(where: { $0.keyboard && $0.r == kIOReturnNotPrivileged }) {
-        for d in seized { IOHIDDeviceClose(d, IOOptionBits(kIOHIDOptionsTypeNone)) }
-        print("locking the keyboard needs admin rights, asking sudo... (keebclean --install skips this)")
-        reexecAsRoot()
     }
     unlockedNames = failed.filter { $0.keyboard && !lockedNames.contains($0.name) }
         .map { "\($0.name) (0x\(String(UInt32(bitPattern: $0.r), radix: 16)))" }

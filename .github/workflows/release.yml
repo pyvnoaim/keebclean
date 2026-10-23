@@ -18,7 +18,7 @@ jobs:
           swiftc -O -target x86_64-apple-macos12 main.swift -o keebclean-x86_64
           lipo -create keebclean-arm64 keebclean-x86_64 -output keebclean
           ./keebclean --demo --mute < /dev/null > /dev/null
-          tar -czf "keebclean-$GITHUB_REF_NAME-macos-universal.tar.gz" keebclean README.md LICENSE
+          tar -czf keebclean-macos-universal.tar.gz keebclean README.md LICENSE  # fixed name: install.sh fetches latest/download
           shasum -a 256 keebclean-*.tar.gz > checksums.txt
       - name: Publish release
         env:

@@ -28,43 +28,27 @@ Most keyboard cleaning apps filter key events after macOS has already seen them,
 
 ## Install
 
-### Homebrew
-
 ```sh
 brew install pyvnoaim/tap/keebclean
-keebclean --install
 ```
 
-### Download
-
-Grab `keebclean-<version>-macos-universal.tar.gz` from the [latest release](https://github.com/pyvnoaim/keebclean/releases/latest):
+or, without Homebrew:
 
 ```sh
-tar -xzf keebclean-*-macos-universal.tar.gz
-xattr -d com.apple.quarantine keebclean   # only needed if you downloaded it with a browser
-./keebclean --install
+curl -fsSL https://raw.githubusercontent.com/pyvnoaim/keebclean/main/install.sh | sh
 ```
 
-The binary isn't signed with an Apple Developer ID, which is why macOS quarantines browser downloads.
+The script downloads the latest release, verifies its checksum and sets keebclean up. To build from source instead: `git clone https://github.com/pyvnoaim/keebclean.git && cd keebclean && make`.
 
-### From source
+### Password-free locking
 
-```sh
-git clone https://github.com/pyvnoaim/keebclean.git
-cd keebclean
-make
-make install
-```
+Locking the keyboard needs admin rights. The first time you lock (and once after each update), keebclean asks for your password and sets itself up so it never has to ask again:
 
-### What `--install` does
-
-It asks for your password once, then locking never asks again:
-
-- copies keebclean to `/usr/local/libexec/keebclean`, owned by root, so nothing running as you can replace it
+- copies itself to `/Library/PrivilegedHelperTools/keebclean`, owned by root, so nothing running as you can replace it
 - adds a sudo rule for exactly that file, pinned to its SHA-256 hash
-- links `keebclean` into `/usr/local/bin`
+- links `keebclean` into `/usr/local/bin` if nothing is there yet
 
-Run it again after every update or rebuild, since the pinned hash changes. `keebclean --uninstall` removes everything. You can also skip it entirely: keebclean then asks for your password whenever macOS needs admin rights to lock the keyboard.
+`keebclean --uninstall` removes all of it.
 
 ## Usage
 
