@@ -250,7 +250,8 @@ func draw() {
     if !unlockedNames.isEmpty { out.append(fg(bright) + "not locked  " + unlockedNames.joined(separator: ", ") + R) }
 
     let m = (0...unlockSeq.count).last { typedKeys.suffix($0).elementsEqual(unlockSeq.prefix($0)) } ?? 0
-    let word = "unlock".enumerated().map { ($0.offset < m ? fg(accent) + B : fg(bright)) + String($0.element) + R }.joined()
+    // typed letters look like a held key (white block, dark text), the rest stays plain
+    let word = "unlock".enumerated().map { ($0.offset < m ? bg(accent) + fg(dark) + B : fg(bright)) + String($0.element) + R }.joined()
     out.append("")
     out.append(fg(muted) + "type " + word + fg(muted) + " to unlock" + R)
 
