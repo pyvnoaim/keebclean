@@ -405,7 +405,7 @@ func sudo(_ a: [String], quiet: Bool = false) -> Int32 {
     posix_spawn_file_actions_init(&fa)
     defer { posix_spawn_file_actions_destroy(&fa) }
     if quiet { for fd in [STDOUT_FILENO, STDERR_FILENO] { posix_spawn_file_actions_addopen(&fa, fd, "/dev/null", O_WRONLY, 0) } }
-    var argv = (["sudo"] + a).map { strdup($0) } + [nil]
+    var argv: [UnsafeMutablePointer<CChar>?] = (["sudo"] + a).map { strdup($0) } + [nil]
     defer { argv.forEach { free($0) } }
     var pid: pid_t = 0
     guard posix_spawn(&pid, "/usr/bin/sudo", &fa, nil, &argv, environ) == 0 else { return 127 }
@@ -526,7 +526,7 @@ func runUpdate() -> Never {
     let cmd = brew ? "brew upgrade keebclean"
                    : "curl -fsSL https://raw.githubusercontent.com/pyvnoaim/keebclean/main/install.sh | sh"
     print(brew ? "updating with Homebrew..." : "updating with the install script...")
-    var argv = ["/bin/sh", "-c", cmd].map { strdup($0) } + [nil]
+    var argv: [UnsafeMutablePointer<CChar>?] = [strdup("/bin/sh"), strdup("-c"), strdup(cmd), nil]  // typed: older compilers can't infer it
     execv("/bin/sh", &argv)
     print("could not start the update, run: \(cmd)"); exit(1)
 }
