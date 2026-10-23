@@ -56,7 +56,7 @@ keebclean --mute           # no switch sounds
 keebclean --version
 ```
 
-When a newer release is out, the lock screen says so: type `update` (like `unlock`) and keebclean unlocks and updates itself. You can also update by running the install script again.
+When a newer release is out, the lock screen says so: type `update` (like `unlock`) and keebclean unlocks and updates itself, showing each step and asking for your password once. Then it waits with nothing locked: type `lock` to carry on with the new version, or press esc to quit. If the update fails, type `retry` or press esc. You can also update by running the install script again.
 
 To find out, keebclean asks GitHub for the latest release each time it starts, as you and never as root, and gives up after 2 seconds. Set `KEEBCLEAN_NO_UPDATE_CHECK=1` to turn that off.
 

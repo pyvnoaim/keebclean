@@ -15,6 +15,7 @@
 import AppKit
 import AudioToolbox
 import Carbon
+import CryptoKit
 import Foundation
 import IOKit.hid
 
@@ -231,15 +232,38 @@ func typedWord(_ word: String, _ seq: [Int]) -> String {
     return word.enumerated().map { ($0.offset < m ? fg(flash) + B : fg(muted)) + String($0.element) + R }.joined()
 }
 
-var lastDraw = Date.distantPast
-func draw() {
-    let now = Date()
-    lastDraw = now
+// the update and ready screens read what you type from the terminal: nothing is locked there
+var typedText = ""
+func typedChars(_ word: String) -> String {
+    let m = (0...word.count).last { typedText.hasSuffix(String(word.prefix($0))) } ?? 0
+    return word.enumerated().map { ($0.offset < m ? fg(flash) + B : fg(muted)) + String($0.element) + R }.joined()
+}
+
+func screenSize() -> (cols: Int, lines: Int, u: Double, width: Int) {
     var ws = winsize()
     _ = ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws)
     let cols = ws.ws_col > 0 ? Int(ws.ws_col) : 80, lines = ws.ws_row > 0 ? Int(ws.ws_row) : 24
     let u = cols >= 94 ? 6.0 : cols >= 78 ? 5.0 : 4.0
-    let width = Int(15 * u) - 1  // keyboard's visible width, without the trailing gap
+    return (cols, lines, u, Int(15 * u) - 1)  // width: the keyboard's, without the trailing gap
+}
+
+// centers the lines on screen; returns where they start, for placing the cursor
+@discardableResult
+func present(_ out: [String], _ cols: Int, _ lines: Int, _ width: Int) -> (top: Int, left: Int) {
+    let topPad = max(0, (lines - out.count) / 2), padN = max(0, (cols - width) / 2)
+    let pad = rep(" ", padN)
+    let frame = "\u{1B}[H" + rep("\u{1B}[K\n", topPad) + out.map { pad + $0 + "\u{1B}[K" }.joined(separator: "\n") + "\u{1B}[J"
+    print(frame, terminator: "")
+    fflush(stdout)
+    return (topPad, padN)
+}
+
+var lastDraw = Date.distantPast
+var readyVersion: String? = nil  // set after an update: the keyboard is shown, nothing is locked
+func draw() {
+    let now = Date()
+    lastDraw = now
+    let (cols, lines, u, width) = screenSize()
 
     let (dot, mode) = demo ? (bright, "demo") : test ? (bright, "test mode") : (bright, "locked")
     let hint = demo ? "presses are simulated" : test ? "keys still reach your Mac" : "nothing reaches your Mac"
@@ -259,9 +283,18 @@ func draw() {
     out.append("")
     out += cap(Key(id: TP, units: 6, labels: ["trackpad"]), tpW, u, now).map { rep(" ", (width - tpW) / 2) + $0 }
 
+    func center(_ s: String) -> String { rep(" ", (width - vis(s)) / 2) + s }
+    if let v = readyVersion {
+        out[0] = spread(fg(bright) + B + "keebclean" + R + fg(muted) + "  updated to " + fg(bright) + v + R,
+                        fg(bright) + "● " + B + "ready" + R, width)
+        out += ["", center(fg(muted) + "nothing is locked yet, keys still reach your Mac" + R), "", "",
+                center(fg(muted) + "type " + typedChars("lock") + fg(muted) + " to lock" + R), center(fg(dimBorder) + "esc to quit" + R)]
+        present(out, cols, lines, width)
+        return
+    }
+
     // one centered column under the trackpad: progress, numbers, then what to type.
     // Devices only show when one couldn't be locked.
-    func center(_ s: String) -> String { rep(" ", (width - vis(s)) / 2) + s }
     let done = cleaned.count * tpW / lockable.count
     out.append("")
     out.append(center(fg(bright) + B + "\(cleaned.count)" + R + fg(muted) + " of \(lockable.count) keys cleaned" + R))
@@ -280,11 +313,7 @@ func draw() {
         out.append(center(fg(dimBorder) + "v\(v) available · type " + typedWord("update", updateSeq) + fg(dimBorder) + " to update" + R))
     }
 
-    let topPad = max(0, (lines - out.count) / 2), padN = max(0, (cols - width) / 2)
-    let pad = rep(" ", padN)
-    let frame = "\u{1B}[H" + rep("\u{1B}[K\n", topPad) + out.map { pad + $0 + "\u{1B}[K" }.joined(separator: "\n") + "\u{1B}[J"
-    print(frame, terminator: "")
-    fflush(stdout)
+    present(out, cols, lines, width)
 }
 
 // MARK: input
@@ -299,9 +328,10 @@ func restoreTerm() {
 
 func finish(_ reason: String, _ code: Int32) -> Never {
     for d in seized { IOHIDDeviceClose(d, IOOptionBits(kIOHIDOptionsTypeNone)) }
+    if let t = tap { CGEvent.tapEnable(tap: t, enable: false) }  // test mode may carry on into the update screen
     restoreTerm()
     print("\(reason): \(presses) presses, \(cleaned.count)/\(lockable.count) keys cleaned")
-    if code == updateCode && getuid() != 0 { runUpdate() }  // test mode; a root lock hands this back to you instead
+    if code == updateCode && getuid() != 0, let v = updateAvailable { runUpdate(v) }  // test mode; a root lock hands this back to you instead
     exit(code)
 }
 
@@ -313,7 +343,7 @@ func handle(_ id: Int, _ isDown: Bool) {
         last = names[id] ?? String(format: "media 0x%X", id & 0xFFFF)
         typedKeys = Array((typedKeys + [id]).suffix(max(unlockSeq.count, updateSeq.count)))
         if typedKeys.suffix(unlockSeq.count).elementsEqual(unlockSeq) { finish("unlocked", 0) }
-        if updateAvailable != nil && typedKeys.suffix(updateSeq.count).elementsEqual(updateSeq) { finish("updating", updateCode) }
+        if updateAvailable != nil && typedKeys.suffix(updateSeq.count).elementsEqual(updateSeq) { finish("unlocked to update", updateCode) }
     } else {
         down.remove(id)
         play(releaseFor[id], releaseGeneric)
@@ -414,15 +444,18 @@ let me = URL(fileURLWithPath: Bundle.main.executablePath ?? args[0]).resolvingSy
 
 // posix_spawn, not Process: Process puts the child in its own process group, and sudo then gets
 // stopped (SIGTTIN) the moment it reads your password from the terminal
-func sudo(_ a: [String], quiet: Bool = false) -> Int32 {
+func sudo(_ a: [String], quiet: Bool = false) -> Int32 { run("/usr/bin/sudo", a, to: quiet ? "/dev/null" : nil) }
+
+// output goes to the terminal, or to the file `to` names
+func run(_ exe: String, _ a: [String], to file: String? = nil) -> Int32 {
     var fa: posix_spawn_file_actions_t?
     posix_spawn_file_actions_init(&fa)
     defer { posix_spawn_file_actions_destroy(&fa) }
-    if quiet { for fd in [STDOUT_FILENO, STDERR_FILENO] { posix_spawn_file_actions_addopen(&fa, fd, "/dev/null", O_WRONLY, 0) } }
-    var argv: [UnsafeMutablePointer<CChar>?] = (["sudo"] + a).map { strdup($0) } + [nil]
+    if let file { for fd in [STDOUT_FILENO, STDERR_FILENO] { posix_spawn_file_actions_addopen(&fa, fd, file, O_WRONLY | O_CREAT | O_APPEND, 0o600) } }
+    var argv: [UnsafeMutablePointer<CChar>?] = ([exe] + a).map { strdup($0) } + [nil]
     defer { argv.forEach { free($0) } }
     var pid: pid_t = 0
-    guard posix_spawn(&pid, "/usr/bin/sudo", &fa, nil, &argv, environ) == 0 else { return 127 }
+    guard posix_spawn(&pid, exe, &fa, nil, &argv, environ) == 0 else { return 127 }
     var status: Int32 = 0
     while waitpid(pid, &status, 0) == -1 && errno == EINTR {}
     let sig = status & 0x7f
@@ -527,12 +560,121 @@ if viaSudo, let i = args.firstIndex(of: "--latest"), i + 1 < args.count, newer(a
     updateAvailable = args[i + 1]
 }
 
-func runUpdate() -> Never {
-    let cmd = "curl -fsSL https://raw.githubusercontent.com/pyvnoaim/keebclean/main/install.sh | sh"
-    print("updating with the install script...")
-    var argv: [UnsafeMutablePointer<CChar>?] = [strdup("/bin/sh"), strdup("-c"), strdup(cmd), nil]  // typed: older compilers can't infer it
-    execv("/bin/sh", &argv)
-    print("could not start the update, run: \(cmd)"); exit(1)
+// The update runs as you, on its own screen: the same steps as install.sh (download, checksum, --install),
+// one checklist line each. sudo asks for the password on that screen; keebclean never sees it.
+// Then the ready screen: nothing locked until you type "lock".
+let updateSteps = [("unlocked", "unlocking"), ("downloaded", "downloading"), ("checksum ok", "checking the download"), ("installed", "installing")]
+typealias UpdateFailure = (step: Int, label: String, detail: String)
+
+func drawUpdate(_ v: String, _ step: Int, failed: UpdateFailure? = nil, password: Bool = false) -> (row: Int, col: Int) {
+    let (cols, lines, _, width) = screenSize()
+    func center(_ s: String) -> String { rep(" ", (width - vis(s)) / 2) + s }
+    let state = failed == nil ? "updating" : "update failed"
+    var out = [spread(fg(bright) + B + "keebclean" + R + fg(muted) + "  \(version) → " + fg(bright) + v + R,
+                      fg(bright) + "● " + B + state + R, width), "", "", ""]
+    var list: [String] = []
+    for (i, s) in updateSteps.enumerated() {
+        if i < step { list.append(fg(bright) + "✓ " + fg(muted) + s.0 + R) }
+        else if i > step { list.append(fg(ghost) + "○ " + s.1 + R) }
+        else if let failed { list.append(fg(bright) + "✗ " + B + failed.label + R) }
+        else { list.append(fg(bright) + "● " + B + s.1 + (i == 1 ? " " + v : "") + R) }
+    }
+    // centered as a block on its widest possible line, so it doesn't shift as the labels change
+    let widest = (updateSteps.flatMap { [$0.0, $0.1] } + ["downloading " + v, failed?.label ?? ""]).map(\.count).max() ?? 0
+    let left = (width - widest - 2) / 2
+    out += list.map { rep(" ", left) + $0 }
+    out.append("")
+    let promptAt = out.count
+    if let failed {
+        out += [center(fg(muted) + failed.detail + R), "", "", ""]
+        out += [center(fg(muted) + "type " + typedChars("retry") + fg(muted) + " to try again" + R), center(fg(dimBorder) + "esc to quit" + R)]
+    } else if password {
+        out += ["", "", "", center(fg(dimBorder) + "your Mac password, once, so keebclean can lock without asking" + R)]
+    }
+    let at = present(out, cols, lines, width)
+    return (at.top + promptAt + 1, at.left + left + 1)
+}
+
+func setRaw(_ on: Bool) {
+    var t = origTerm
+    if on { t.c_lflag &= ~tcflag_t(ICANON | ECHO) }
+    if haveTerm { tcsetattr(STDIN_FILENO, TCSANOW, &t) }
+}
+
+// true once `word` is typed, false on esc (or when the terminal closes)
+func waitFor(_ word: String, _ redraw: () -> Void) -> Bool {
+    typedText = ""
+    redraw()
+    var c: UInt8 = 0
+    while read(STDIN_FILENO, &c, 1) == 1 {
+        if c == 0x1B {  // a lone esc quits; arrows and the like send esc plus more, which is skipped
+            var p = pollfd(fd: STDIN_FILENO, events: Int16(POLLIN), revents: 0)
+            if poll(&p, 1, 30) <= 0 { return false }
+            var rest = [UInt8](repeating: 0, count: 16)
+            _ = read(STDIN_FILENO, &rest, rest.count)
+            continue
+        }
+        typedText = String((typedText + String(UnicodeScalar(c))).lowercased().suffix(word.count))
+        redraw()
+        if typedText == word { return true }
+    }
+    return false
+}
+
+func installRelease(_ v: String) -> UpdateFailure? {
+    let fm = FileManager.default, tmp = NSTemporaryDirectory() + "keebclean-update-\(getpid())"
+    try? fm.removeItem(atPath: tmp)
+    defer { try? fm.removeItem(atPath: tmp) }
+    let unchanged = "still on \(version), nothing changed", log = tmp + "/log"
+    guard (try? fm.createDirectory(atPath: tmp, withIntermediateDirectories: true)) != nil else {
+        return (1, "couldn't make a temporary folder", unchanged)
+    }
+    let base = "https://github.com/pyvnoaim/keebclean/releases/download/v\(v)/", tar = "keebclean-macos-universal.tar.gz"
+    _ = drawUpdate(v, 1)
+    for f in [tar, "checksums.txt"] where run("/usr/bin/curl", ["-fsSL", "-o", "\(tmp)/\(f)", base + f], to: log) != 0 {
+        return (1, "couldn't download \(v)", "offline? " + unchanged)
+    }
+    _ = drawUpdate(v, 2)
+    let sums = (try? String(contentsOfFile: "\(tmp)/checksums.txt", encoding: .utf8)) ?? ""
+    let want = sums.split(separator: "\n").first { $0.hasSuffix(tar) }?.split(separator: " ").first.map(String.init)
+    let got = fm.contents(atPath: "\(tmp)/\(tar)").map { SHA256.hash(data: $0).map { String(format: "%02x", $0) }.joined() }
+    guard let want, want == got, run("/usr/bin/tar", ["-xzf", "\(tmp)/\(tar)", "-C", tmp, "keebclean"], to: log) == 0 else {
+        return (2, "the download didn't match its checksum", unchanged)
+    }
+    let at = drawUpdate(v, 3, password: true)
+    print("\u{1B}[\(at.row);\(at.col)H\u{1B}[?25h", terminator: "")  // sudo's prompt lands here
+    fflush(stdout)
+    setRaw(false)
+    setenv("SUDO_PROMPT", "password: ", 1)
+    let ok = run("\(tmp)/keebclean", ["--install"], to: log) == 0
+    setRaw(true)
+    print("\u{1B}[?25l", terminator: "")
+    guard ok else {
+        let said = ((try? String(contentsOfFile: log, encoding: .utf8)) ?? "").split(separator: "\n").last.map(String.init)
+        return (3, "install didn't finish", said ?? unchanged)
+    }
+    return nil
+}
+
+func runUpdate(_ v: String) -> Never {
+    signal(SIGINT) { _ in restoreTerm(); exit(130) }  // the lock's parent ignored these while root held the terminal
+    signal(SIGTERM) { _ in restoreTerm(); exit(143) }
+    uiActive = true
+    print("\u{1B}[?1049h\u{1B}[?25l", terminator: "")
+    setRaw(true)
+    while let failed = installRelease(v) {
+        guard waitFor("retry", { _ = drawUpdate(v, failed.step, failed: failed) }) else {
+            restoreTerm(); print("update to \(v) failed: \(failed.label), still on \(version)"); exit(1)
+        }
+    }
+    readyVersion = v
+    guard waitFor("lock", draw) else { restoreTerm(); print("updated to \(v)"); exit(0) }
+    restoreTerm()
+    // the new copy, with what you started with (a lock, whatever --test said)
+    let next = [installed] + args.dropFirst().filter { $0 != "--test" }
+    var argv: [UnsafeMutablePointer<CChar>?] = next.map { strdup($0) } + [nil]
+    execv(installed, &argv)
+    print("updated to \(v), run keebclean to lock"); exit(0)
 }
 
 signal(SIGINT) { _ in restoreTerm(); exit(130) }
@@ -576,10 +718,11 @@ if demo {
             guard install() else { exit(1) }
         }
         var rootArgs = [installed] + Array(args.dropFirst())
-        if let v = latestRelease(), newer(v, than: version) { rootArgs += ["--latest", v] }
+        let latest = latestRelease().flatMap { newer($0, than: version) ? $0 : nil }
+        if let v = latest { rootArgs += ["--latest", v] }
         signal(SIGINT, SIG_IGN); signal(SIGTERM, SIG_IGN)  // the root lock owns the terminal from here
         let code = sudo(rootArgs)
-        if code == updateCode { runUpdate() }
+        if code == updateCode, let v = latest { runUpdate(v) }
         exit(code)
     }
     if test, let v = latestRelease(), newer(v, than: version) { updateAvailable = v }
