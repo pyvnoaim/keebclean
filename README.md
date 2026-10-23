@@ -1,5 +1,9 @@
 # keebclean
 
+[![ci](https://github.com/pyvnoaim/keebclean/actions/workflows/ci.yml/badge.svg)](https://github.com/pyvnoaim/keebclean/actions/workflows/ci.yml)
+[![release](https://img.shields.io/github/v/release/pyvnoaim/keebclean)](https://github.com/pyvnoaim/keebclean/releases/latest)
+[![license](https://img.shields.io/github/license/pyvnoaim/keebclean)](LICENSE)
+
 **Lock your Mac's keyboard and trackpad while you clean them, and watch every key light up as you wipe it.**
 
 ![keebclean in the terminal](docs/screenshot.svg)
@@ -19,10 +23,31 @@ Most keyboard cleaning apps filter key events after macOS has already seen them,
 
 ## Requirements
 
-- macOS on Apple Silicon or Intel (developed on a recent macOS release)
-- Xcode Command Line Tools: `xcode-select --install`
+- macOS 12 or later, Apple Silicon or Intel
+- To build from source: Xcode Command Line Tools (`xcode-select --install`)
 
 ## Install
+
+### Homebrew
+
+```sh
+brew install pyvnoaim/tap/keebclean
+keebclean --install
+```
+
+### Download
+
+Grab `keebclean-<version>-macos-universal.tar.gz` from the [latest release](https://github.com/pyvnoaim/keebclean/releases/latest):
+
+```sh
+tar -xzf keebclean-*-macos-universal.tar.gz
+xattr -d com.apple.quarantine keebclean   # only needed if you downloaded it with a browser
+./keebclean --install
+```
+
+The binary isn't signed with an Apple Developer ID, which is why macOS quarantines browser downloads.
+
+### From source
 
 ```sh
 git clone https://github.com/pyvnoaim/keebclean.git
@@ -31,9 +56,15 @@ make
 make install
 ```
 
-`make install` asks for your password once. It copies keebclean to `/usr/local/libexec/keebclean` (owned by root) and adds a sudo rule for exactly that file, so locking never asks for a password again. It also links `keebclean` into `/usr/local/bin`. Run `make install` again after you rebuild, and `make uninstall` to remove everything.
+### What `--install` does
 
-You can also skip the install and run `./keebclean` from the folder. It asks for your password whenever macOS needs admin rights to lock the keyboard.
+It asks for your password once, then locking never asks again:
+
+- copies keebclean to `/usr/local/libexec/keebclean`, owned by root, so nothing running as you can replace it
+- adds a sudo rule for exactly that file, pinned to its SHA-256 hash
+- links `keebclean` into `/usr/local/bin`
+
+Run it again after every update or rebuild, since the pinned hash changes. `keebclean --uninstall` removes everything. You can also skip it entirely: keebclean then asks for your password whenever macOS needs admin rights to lock the keyboard.
 
 ## Usage
 
@@ -75,6 +106,10 @@ Trim the silence at the start of each file, or presses will feel delayed. Withou
 - **Keyboard:** every keyboard HID device is opened with `kIOHIDOptionsTypeSeizeDevice`, which gives keebclean exclusive access, so macOS never receives the input. Devices that refuse (such as the headphone jack remote, which its audio driver holds) are skipped and listed on screen.
 - **Trackpad:** trackpads are multitouch devices that can't be seized the same way, so a `CGEventTap` drops pointer events and the cursor is detached from the mouse.
 - **Layout:** the key labels come from the current input source via `UCKeyTranslate`, and the physical layout (ANSI or ISO) from `KBGetLayoutType`.
+
+## Security
+
+The sudo rule means any program running as you can start keebclean as root without a password. So when it runs through sudo, keebclean only allows the lock itself: `--test`, `--install` and `--uninstall` are refused (test mode would otherwise be a keylogger that skips the Input Monitoring prompt), and `--timeout` is capped at 30 minutes.
 
 ## Limitations
 
