@@ -402,8 +402,13 @@ func install() -> Bool {
       fi
     done
     rm -f \(installDir)/sounds/*
-    for f in '\(soundsSource)'/*; do  # skip symlinks: they could pull protected files into a world-readable place
-      if [ -f "$f" ] && [ ! -L "$f" ]; then install -o root -g wheel -m 644 "$f" \(installDir)/sounds/; fi
+    # read sounds as you, not as root: a symlinked folder or file can't pull in anything you couldn't read yourself
+    for f in '\(soundsSource)'/*; do
+      case "$f" in *.wav|*.aif|*.aiff|*.caf) ;; *) continue ;; esac
+      [ -f "$f" ] || continue
+      n=$(basename "$f")
+      sudo -u '\(user)' /bin/cat "$f" > "\(installDir)/sounds/$n"
+      chmod 644 "\(installDir)/sounds/$n"
     done
     # pin the rule to this exact binary: sudo refuses anything else at that path
     h=$(openssl dgst -sha256 -binary \(installed) | base64)
@@ -447,9 +452,11 @@ if demo {
     let all = Array(lockable)
     var script = (0..<60).flatMap { _ -> [(Int, Bool)] in let k = all.randomElement()!; return [(k, true), (k, false)] }
     script += unlockSeq.flatMap { [($0, true), ($0, false)] }
-    deadline = Date().addingTimeInterval(Double(script.count) * 0.06 + 2)
+    deadline = Date().addingTimeInterval(60)  // backstop only: slow CI runners fire timers late
     Timer.scheduledTimer(withTimeInterval: 0.06, repeats: true) { _ in
-        if !script.isEmpty { let (k, d) = script.removeFirst(); handle(k, d) }
+        guard !script.isEmpty else { finish("demo FAILED, never unlocked", 1) }  // "unlock" ends it before this
+        let (k, d) = script.removeFirst()
+        handle(k, d)
     }
 } else {
     // locking runs as the installed root-owned copy. First run, or after an update, set it up (one password prompt).
