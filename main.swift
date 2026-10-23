@@ -291,7 +291,6 @@ func draw() {
 
 // MARK: input
 func restoreTerm() {
-    CGAssociateMouseAndMouseCursorPosition(1)
     guard uiActive else { return }  // nothing changed yet, e.g. Ctrl+C at the password prompt
     var t = origTerm
     tcflush(STDIN_FILENO, TCIFLUSH)  // test mode: don't hand what you typed to the shell
@@ -352,8 +351,10 @@ func play(_ special: [SystemSoundID]?, _ generic: [SystemSoundID]) {
 }
 
 // Trackpads are multitouch devices that can't be seized like keyboards, so pointer events (move, click,
-// scroll, gestures) are dropped in an event tap instead, and the cursor is frozen. Test mode only listens.
-var tap: CFMachPort?
+// scroll, gestures) are dropped in an event tap instead. Dropping a move doesn't stop the cursor (it has already
+// moved by then), and CGAssociateMouseAndMouseCursorPosition only holds for the frontmost app, which a terminal
+// tool isn't, so every pointer event warps it back. Test mode only listens.
+var tap: CFMachPort?, frozenAt = CGPoint.zero
 let pointerTypes: [UInt32] = [1, 2, 3, 4, 5, 6, 7, 18, 19, 20, 22, 25, 26, 27, 29, 30, 31, 32, 34]
 
 func pointerSeen() {
@@ -369,7 +370,7 @@ func startPointerTap() -> Bool {
             if let t = tap { CGEvent.tapEnable(tap: t, enable: true) }
         } else if pointerTypes.contains(type.rawValue) {
             pointerSeen()
-            if !test { return nil }
+            if !test { CGWarpMouseCursorPosition(frozenAt); return nil }
         }
         return Unmanaged.passUnretained(event)
     }
@@ -380,7 +381,7 @@ func startPointerTap() -> Bool {
     tap = t
     CFRunLoopAddSource(CFRunLoopGetCurrent(), CFMachPortCreateRunLoopSource(nil, t, 0), .commonModes)
     CGEvent.tapEnable(tap: t, enable: true)
-    if !test { CGAssociateMouseAndMouseCursorPosition(0) }
+    frozenAt = CGEvent(source: nil)?.location ?? .zero
     return true
 }
 
