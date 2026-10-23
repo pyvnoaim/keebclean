@@ -111,6 +111,21 @@ let unlockSeq = keySeq("unlock"), updateSeq = keySeq("update")
 let version = "dev"  // release and Homebrew builds stamp the tag in here
 let args = CommandLine.arguments
 if args.contains("--version") { print("keebclean \(version)"); exit(0) }
+// unknown options must never fall through to a lock: "keebclean --testbrew" (a typo) used to lock the keyboard
+let usage = """
+usage: keebclean [--timeout SECONDS] [--screen] [--mute]   lock keyboard and trackpad, type "unlock" to end
+       keebclean --test | --demo                          preview without locking
+       keebclean --install | --uninstall | --version
+"""
+var rest = args.dropFirst()
+while let a = rest.popFirst() {
+    switch a {
+    case "--timeout", "--latest": _ = rest.popFirst()
+    case "--demo", "--test", "--screen", "--mute", "--install", "--uninstall": break
+    case "--help", "-h": print(usage); exit(0)
+    default: print("keebclean: unknown option \(a)\n\(usage)"); exit(2)
+    }
+}
 let demo = args.contains("--demo")
 let test = args.contains("--test")  // listen without seizing, keys still reach macOS
 let screenMode = args.contains("--screen")
@@ -430,6 +445,10 @@ func audioFiles(_ dir: String) -> [String: Data] {
         .compactMap { n in FileManager.default.contents(atPath: dir + "/" + n).map { (n, $0) } })
 }
 
+// installed through Homebrew if this binary lives in a Cellar, or a keebclean formula is installed at all
+let installedWithBrew = me.path.contains("/Cellar/")
+    || ["/opt/homebrew/opt/keebclean", "/usr/local/opt/keebclean"].contains { FileManager.default.fileExists(atPath: $0) }
+
 // one password prompt: root-owned copy, hash-pinned sudo rule, /usr/local/bin link
 func install() -> Bool {
     let user = ProcessInfo.processInfo.environment["SUDO_USER"] ?? NSUserName()
@@ -460,11 +479,17 @@ func install() -> Bool {
     visudo -cf "$t" >/dev/null
     install -o root -g wheel -m 440 "$t" /etc/sudoers.d/keebclean
     rm -f "$t"
-    # put keebclean on PATH, without touching a link Homebrew already made
-    install -d -m 755 /usr/local/bin
-    [ -e /usr/local/bin/keebclean ] || [ -L /usr/local/bin/keebclean ] || ln -s \(installed) /usr/local/bin/keebclean
+    link=/usr/local/bin/keebclean
+    if [ "$4" = brew ]; then
+      # Homebrew already puts keebclean on PATH; a link to this copy would shadow every brew upgrade
+      if [ "$(readlink "$link")" = \(installed) ]; then rm -f "$link"; fi
+    else
+      # put keebclean on PATH, without touching a link someone else made
+      install -d -m 755 /usr/local/bin
+      [ -e "$link" ] || [ -L "$link" ] || ln -s \(installed) "$link"
+    fi
     """
-    guard sudo(["/bin/sh", "-c", script, "keebclean-setup", me.path, soundsSource, user]) == 0 else { print("setup failed, see the error above; keebclean --uninstall cleans up"); return false }
+    guard sudo(["/bin/sh", "-c", script, "keebclean-setup", me.path, soundsSource, user, installedWithBrew ? "brew" : "script"]) == 0 else { print("setup failed, see the error above; keebclean --uninstall cleans up"); return false }
     let ok = sudo(["-n", "-l", installed], quiet: true) == 0
     print(ok ? "set up: keebclean now locks without a password"
              : "set up, but sudo still asks for a password: /etc/sudoers.d may not be read on this Mac")
@@ -522,7 +547,7 @@ if viaSudo, let i = args.firstIndex(of: "--latest"), i + 1 < args.count, newer(a
 }
 
 func runUpdate() -> Never {
-    let brew = me.path.contains("/Cellar/")
+    let brew = installedWithBrew
     let cmd = brew ? "brew upgrade keebclean"
                    : "curl -fsSL https://raw.githubusercontent.com/pyvnoaim/keebclean/main/install.sh | sh"
     print(brew ? "updating with Homebrew..." : "updating with the install script...")

@@ -4,6 +4,8 @@ keebclean: main.swift
 # demo mode doubles as the self-check: exits nonzero if the layout or unlock logic breaks
 test: keebclean
 	./keebclean --demo --mute < /dev/null > /dev/null
+	# a typo must never lock the keyboard
+	./keebclean --testbrew > /dev/null; test $$? -eq 2
 
 install: keebclean
 	./keebclean --install
