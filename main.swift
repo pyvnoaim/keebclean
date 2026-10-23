@@ -495,7 +495,7 @@ if args.contains("--uninstall") {
 }
 
 // MARK: updates
-// Checked as you, never as root: at most once a day, 2 s timeout, and KEEBCLEAN_NO_UPDATE_CHECK=1 turns it off.
+// Checked as you, never as root: on every start, 2 s timeout, and KEEBCLEAN_NO_UPDATE_CHECK=1 turns it off.
 // Typing "update" during a lock ends it with updateCode; you (the parent process) then run the update.
 let updateCode: Int32 = 3
 
@@ -507,12 +507,6 @@ func newer(_ a: String, than b: String) -> Bool {
 
 func latestRelease() -> String? {
     guard getuid() != 0, version != "dev", ProcessInfo.processInfo.environment["KEEBCLEAN_NO_UPDATE_CHECK"] == nil else { return nil }
-    let cache = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".config/keebclean/latest-release")
-    let checked = (try? FileManager.default.attributesOfItem(atPath: cache.path))?[.modificationDate] as? Date
-    if let checked, Date().timeIntervalSince(checked) < 24 * 3600 {
-        let v = (try? String(contentsOf: cache, encoding: .utf8)) ?? ""
-        return v.isEmpty ? nil : v
-    }
     var req = URLRequest(url: URL(string: "https://api.github.com/repos/pyvnoaim/keebclean/releases/latest")!, timeoutInterval: 2)
     req.setValue("keebclean/\(version)", forHTTPHeaderField: "User-Agent")
     var tag = ""
@@ -523,11 +517,8 @@ func latestRelease() -> String? {
         done.signal()
     }.resume()
     // read tag only once the callback has signalled: after a timeout it may still be writing
-    var found = done.wait(timeout: .now() + 2.5) == .success ? tag : ""
-    if !newer(found, than: "0.0.0") { found = "" }  // offline or odd answer: remember "nothing", try again tomorrow
-    try? FileManager.default.createDirectory(at: cache.deletingLastPathComponent(), withIntermediateDirectories: true)
-    try? found.write(to: cache, atomically: true, encoding: .utf8)
-    return found.isEmpty ? nil : found
+    let found = done.wait(timeout: .now() + 2.5) == .success ? tag : ""
+    return newer(found, than: "0.0.0") ? found : nil  // offline or odd answer: no hint
 }
 
 // the lock as root only learns about an update from you (--latest); it never goes online itself
