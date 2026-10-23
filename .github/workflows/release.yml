@@ -12,8 +12,13 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Check tag
+        run: |
+          case "$GITHUB_REF_NAME" in v[0-9]*.[0-9]*.[0-9]*) ;; *) echo "tag must look like v1.2.3" >&2; exit 1 ;; esac
       - name: Build universal binary
         run: |
+          sed -i '' "s/^let version = \"dev\"/let version = \"${GITHUB_REF_NAME#v}\"/" main.swift
+          grep -q "^let version = \"${GITHUB_REF_NAME#v}\"" main.swift
           swiftc -O -target arm64-apple-macos12 main.swift -o keebclean-arm64
           swiftc -O -target x86_64-apple-macos12 main.swift -o keebclean-x86_64
           lipo -create keebclean-arm64 keebclean-x86_64 -output keebclean
@@ -24,3 +29,17 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release create "$GITHUB_REF_NAME" keebclean-*.tar.gz checksums.txt --title "$GITHUB_REF_NAME" --generate-notes
+      - name: Update Homebrew tap
+        env:
+          TAP_KEY: ${{ secrets.TAP_DEPLOY_KEY }}
+        run: |
+          mkdir -p ~/.ssh && printf '%s\n' "$TAP_KEY" > ~/.ssh/tap && chmod 600 ~/.ssh/tap
+          export GIT_SSH_COMMAND="ssh -i $HOME/.ssh/tap -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
+          src="https://github.com/$GITHUB_REPOSITORY/archive/refs/tags/$GITHUB_REF_NAME.tar.gz"
+          sha=$(curl -fsSL "$src" | shasum -a 256 | cut -d' ' -f1)
+          git clone -q git@github.com:pyvnoaim/homebrew-tap.git tap
+          cd tap
+          sed -i '' -E "s|^  url \".*\"|  url \"$src\"|; s|^  sha256 \".*\"|  sha256 \"$sha\"|" Formula/keebclean.rb
+          git -c user.name="github-actions[bot]" -c user.email="41898299+github-actions[bot]@users.noreply.github.com" \
+            commit -qam "keebclean ${GITHUB_REF_NAME#v}"
+          git push -q

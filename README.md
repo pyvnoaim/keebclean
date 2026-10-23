@@ -59,7 +59,10 @@ keebclean --timeout 300    # release automatically after 5 minutes (default: 15)
 keebclean --test           # show key presses without locking anything, e.g. for screenshots
 keebclean --demo           # simulated presses, no permissions needed
 keebclean --mute           # no switch sounds
+keebclean --version
 ```
+
+Update with `brew upgrade keebclean`, or by running the install script again.
 
 ## Permissions
 
@@ -99,6 +102,14 @@ The sudo rule means any program running as you can start keebclean as root witho
 
 - The power button and Touch ID are not part of the keyboard and can't be blocked. Holding the power button is the last resort if anything ever goes wrong.
 - Only built-in MacBook layouts are drawn. External keyboards are locked, but drawn as the MacBook layout.
+
+## Releasing
+
+```sh
+git tag v1.2.3 && git push origin v1.2.3
+```
+
+The release workflow stamps the version, builds the universal binary, publishes the GitHub release and updates the Homebrew formula in [pyvnoaim/homebrew-tap](https://github.com/pyvnoaim/homebrew-tap).
 
 ## License
 

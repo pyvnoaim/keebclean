@@ -10,6 +10,7 @@
 // setup:  automatic on the first lock and after updates (one password prompt each), or keebclean --install
 //         keebclean --uninstall
 // test:   keebclean --test                    (real presses shown, nothing locked: for screenshots)
+// info:   keebclean --version
 // demo:   keebclean --demo                    (no lock, simulated presses; exits 0 if unlock works)
 import AppKit
 import AudioToolbox
@@ -99,7 +100,9 @@ let unlockSeq = "unlock".map { ch in
 }
 
 // MARK: state
+let version = "dev"  // release and Homebrew builds stamp the tag in here
 let args = CommandLine.arguments
+if args.contains("--version") { print("keebclean \(version)"); exit(0) }
 let demo = args.contains("--demo")
 let test = args.contains("--test")  // listen without seizing, keys still reach macOS
 let screenMode = args.contains("--screen")
