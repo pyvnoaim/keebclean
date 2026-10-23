@@ -10,7 +10,7 @@
 // setup:  automatic on the first lock and after updates (one password prompt each), or keebclean --install
 //         keebclean --uninstall
 // test:   keebclean --test                    (real presses shown, nothing locked: for screenshots)
-// info:   keebclean --version
+// info:   keebclean --version   (a lock shows when a newer release is out: type "update" to update)
 // demo:   keebclean --demo                    (no lock, simulated presses; exits 0 if unlock works)
 import AppKit
 import AudioToolbox
@@ -99,10 +99,13 @@ for key in rows.joined() where key.id >= 0 {
     if let b = key.below { lockableIDs.append(b) }
 }
 let lockable = Set(lockableIDs)
-// "unlock" by what the keys type in your layout, not by US position
-let unlockSeq = "unlock".map { ch in
-    rows.joined().first { vk[$0.id] != nil && $0.labels[0].lowercased() == String(ch) }?.id ?? Int(ch.asciiValue! - 97) + 0x04
+// "unlock" and "update" by what the keys type in your layout, not by US position
+func keySeq(_ word: String) -> [Int] {
+    word.map { ch in
+        rows.joined().first { vk[$0.id] != nil && $0.labels[0].lowercased() == String(ch) }?.id ?? Int(ch.asciiValue! - 97) + 0x04
+    }
 }
+let unlockSeq = keySeq("unlock"), updateSeq = keySeq("update")
 
 // MARK: state
 let version = "dev"  // release and Homebrew builds stamp the tag in here
@@ -207,6 +210,12 @@ func cap(_ key: Key, _ w: Int, _ u: Double, _ now: Date) -> [String] {
 func vis(_ s: String) -> Int { s.replacingOccurrences(of: "\u{1B}\\[[0-9;?]*[a-zA-Z]", with: "", options: .regularExpression).count }
 func spread(_ l: String, _ r: String, _ w: Int) -> String { l + rep(" ", w - vis(l) - vis(r)) + r }
 
+// typed letters look like a held key (white block, dark text), the rest stays plain
+func typedWord(_ word: String, _ seq: [Int]) -> String {
+    let m = (0...seq.count).last { typedKeys.suffix($0).elementsEqual(seq.prefix($0)) } ?? 0
+    return word.enumerated().map { ($0.offset < m ? bg(accent) + fg(dark) + B : fg(bright)) + String($0.element) + R }.joined()
+}
+
 var lastDraw = Date.distantPast
 func draw() {
     let now = Date()
@@ -249,11 +258,14 @@ func draw() {
     if !demo { out.append(fg(muted) + (test ? "watching " : "locked   ") + lockedNames.joined(separator: ", ") + R) }
     if !unlockedNames.isEmpty { out.append(fg(bright) + "not locked  " + unlockedNames.joined(separator: ", ") + R) }
 
-    let m = (0...unlockSeq.count).last { typedKeys.suffix($0).elementsEqual(unlockSeq.prefix($0)) } ?? 0
-    // typed letters look like a held key (white block, dark text), the rest stays plain
-    let word = "unlock".enumerated().map { ($0.offset < m ? bg(accent) + fg(dark) + B : fg(bright)) + String($0.element) + R }.joined()
     out.append("")
-    out.append(fg(muted) + "type " + word + fg(muted) + " to unlock" + R)
+    let unlockHint = fg(muted) + "type " + typedWord("unlock", unlockSeq) + fg(muted) + " to unlock" + R
+    if let v = updateAvailable {
+        let updateHint = fg(muted) + "v\(v) available · type " + typedWord("update", updateSeq) + fg(muted) + " to update" + R
+        out.append(spread(unlockHint, updateHint, width))
+    } else {
+        out.append(unlockHint)
+    }
 
     let topPad = max(0, (lines - out.count) / 2), padN = max(0, (cols - width) / 2)
     let pad = rep(" ", padN)
@@ -277,6 +289,7 @@ func finish(_ reason: String, _ code: Int32) -> Never {
     for d in seized { IOHIDDeviceClose(d, IOOptionBits(kIOHIDOptionsTypeNone)) }
     restoreTerm()
     print("\(reason): \(presses) presses, \(cleaned.count)/\(lockable.count) keys cleaned")
+    if code == updateCode && getuid() != 0 { runUpdate() }  // test mode; a root lock hands this back to you instead
     exit(code)
 }
 
@@ -286,8 +299,9 @@ func handle(_ id: Int, _ isDown: Bool) {
         play(pressFor[id], pressGeneric)
         if lockable.contains(id) { cleaned.insert(id) }
         last = names[id] ?? String(format: "media 0x%X", id & 0xFFFF)
-        typedKeys = Array((typedKeys + [id]).suffix(unlockSeq.count))
-        if typedKeys == unlockSeq { finish("unlocked", 0) }
+        typedKeys = Array((typedKeys + [id]).suffix(max(unlockSeq.count, updateSeq.count)))
+        if typedKeys.suffix(unlockSeq.count).elementsEqual(unlockSeq) { finish("unlocked", 0) }
+        if updateAvailable != nil && typedKeys.suffix(updateSeq.count).elementsEqual(updateSeq) { finish("updating", updateCode) }
     } else {
         down.remove(id)
         play(releaseFor[id], releaseGeneric)
@@ -386,7 +400,7 @@ let me = URL(fileURLWithPath: Bundle.main.executablePath ?? args[0]).resolvingSy
 
 // posix_spawn, not Process: Process puts the child in its own process group, and sudo then gets
 // stopped (SIGTTIN) the moment it reads your password from the terminal
-func sudo(_ a: [String], quiet: Bool = false) -> Bool {
+func sudo(_ a: [String], quiet: Bool = false) -> Int32 {
     var fa: posix_spawn_file_actions_t?
     posix_spawn_file_actions_init(&fa)
     defer { posix_spawn_file_actions_destroy(&fa) }
@@ -394,10 +408,11 @@ func sudo(_ a: [String], quiet: Bool = false) -> Bool {
     var argv = (["sudo"] + a).map { strdup($0) } + [nil]
     defer { argv.forEach { free($0) } }
     var pid: pid_t = 0
-    guard posix_spawn(&pid, "/usr/bin/sudo", &fa, nil, &argv, environ) == 0 else { return false }
+    guard posix_spawn(&pid, "/usr/bin/sudo", &fa, nil, &argv, environ) == 0 else { return 127 }
     var status: Int32 = 0
     while waitpid(pid, &status, 0) == -1 && errno == EINTR {}
-    return status == 0
+    let sig = status & 0x7f
+    return sig == 0 ? (status >> 8) & 0xff : 128 + sig
 }
 
 // your sounds live in ~/.config/keebclean/sounds so they survive updates; a sounds folder next to the binary
@@ -449,8 +464,8 @@ func install() -> Bool {
     install -d -m 755 /usr/local/bin
     [ -e /usr/local/bin/keebclean ] || [ -L /usr/local/bin/keebclean ] || ln -s \(installed) /usr/local/bin/keebclean
     """
-    guard sudo(["/bin/sh", "-c", script, "keebclean-setup", me.path, soundsSource, user]) else { print("setup failed, see the error above; keebclean --uninstall cleans up"); return false }
-    let ok = sudo(["-n", "-l", installed], quiet: true)
+    guard sudo(["/bin/sh", "-c", script, "keebclean-setup", me.path, soundsSource, user]) == 0 else { print("setup failed, see the error above; keebclean --uninstall cleans up"); return false }
+    let ok = sudo(["-n", "-l", installed], quiet: true) == 0
     print(ok ? "set up: keebclean now locks without a password"
              : "set up, but sudo still asks for a password: /etc/sudoers.d may not be read on this Mac")
     return ok
@@ -459,15 +474,61 @@ if args.contains("--install") { exit(install() ? 0 : 1) }
 if args.contains("--uninstall") {
     let link = "/usr/local/bin/keebclean"  // only remove the link if it's ours
     let ok = sudo(["/bin/sh", "-c", "rm -f /etc/sudoers.d/keebclean && rm -rf \(installDir) && "
-                   + "if [ \"$(readlink \(link))\" = \(installed) ]; then rm -f \(link); fi"])
+                   + "if [ \"$(readlink \(link))\" = \(installed) ]; then rm -f \(link); fi"]) == 0
     print(ok ? "uninstalled" : "uninstall failed")
     exit(ok ? 0 : 1)
 }
 
-func reexecAsRoot() -> Never {
-    var cargs = (["sudo", installed] + args.dropFirst()).map { strdup($0) } + [nil]
-    execv("/usr/bin/sudo", &cargs)
-    print("could not run sudo"); exit(1)
+// MARK: updates
+// Checked as you, never as root: at most once a day, 2 s timeout, and KEEBCLEAN_NO_UPDATE_CHECK=1 turns it off.
+// Typing "update" during a lock ends it with updateCode; you (the parent process) then run the update.
+let updateCode: Int32 = 3
+
+func newer(_ a: String, than b: String) -> Bool {
+    let x = a.split(separator: ".").compactMap { Int($0) }, y = b.split(separator: ".").compactMap { Int($0) }
+    guard x.count == 3, y.count == 3, !a.contains(where: { !"0123456789.".contains($0) }) else { return false }
+    return y.lexicographicallyPrecedes(x)
+}
+
+func latestRelease() -> String? {
+    guard getuid() != 0, version != "dev", ProcessInfo.processInfo.environment["KEEBCLEAN_NO_UPDATE_CHECK"] == nil else { return nil }
+    let cache = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".config/keebclean/latest-release")
+    let checked = (try? FileManager.default.attributesOfItem(atPath: cache.path))?[.modificationDate] as? Date
+    if let checked, Date().timeIntervalSince(checked) < 24 * 3600 {
+        let v = (try? String(contentsOf: cache, encoding: .utf8)) ?? ""
+        return v.isEmpty ? nil : v
+    }
+    var req = URLRequest(url: URL(string: "https://api.github.com/repos/pyvnoaim/keebclean/releases/latest")!, timeoutInterval: 2)
+    req.setValue("keebclean/\(version)", forHTTPHeaderField: "User-Agent")
+    var tag = ""
+    let done = DispatchSemaphore(value: 0)
+    URLSession.shared.dataTask(with: req) { data, _, _ in
+        let json = data.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+        if let t = json?["tag_name"] as? String { tag = t.hasPrefix("v") ? String(t.dropFirst()) : t }
+        done.signal()
+    }.resume()
+    // read tag only once the callback has signalled: after a timeout it may still be writing
+    var found = done.wait(timeout: .now() + 2.5) == .success ? tag : ""
+    if !newer(found, than: "0.0.0") { found = "" }  // offline or odd answer: remember "nothing", try again tomorrow
+    try? FileManager.default.createDirectory(at: cache.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try? found.write(to: cache, atomically: true, encoding: .utf8)
+    return found.isEmpty ? nil : found
+}
+
+// the lock as root only learns about an update from you (--latest); it never goes online itself
+var updateAvailable: String? = nil
+if viaSudo, let i = args.firstIndex(of: "--latest"), i + 1 < args.count, newer(args[i + 1], than: version) {
+    updateAvailable = args[i + 1]
+}
+
+func runUpdate() -> Never {
+    let brew = me.path.contains("/Cellar/")
+    let cmd = brew ? "brew upgrade keebclean"
+                   : "curl -fsSL https://raw.githubusercontent.com/pyvnoaim/keebclean/main/install.sh | sh"
+    print(brew ? "updating with Homebrew..." : "updating with the install script...")
+    var argv = ["/bin/sh", "-c", cmd].map { strdup($0) } + [nil]
+    execv("/bin/sh", &argv)
+    print("could not start the update, run: \(cmd)"); exit(1)
 }
 
 signal(SIGINT) { _ in restoreTerm(); exit(130) }
@@ -487,6 +548,9 @@ if demo {
         precondition(audioFiles("\(tmp)/a") != audioFiles("\(tmp)/b"), "changed sounds not noticed")
         try fm.removeItem(atPath: tmp)
     } catch { preconditionFailure("sound check setup: \(error)") }
+    precondition(newer("0.1.10", than: "0.1.9") && newer("1.0.0", than: "0.9.9") && !newer("0.1.4", than: "0.1.4")
+                 && !newer("0.1.3", than: "0.1.4") && !newer("", than: "0.0.0") && !newer("1.0.0", than: "dev")
+                 && !newer("1.0.0-rc1", than: "0.1.0"), "version comparison")
     let all = Array(lockable)
     var script = (0..<60).flatMap { _ -> [(Int, Bool)] in let k = all.randomElement()!; return [(k, true), (k, false)] }
     script += unlockSeq.flatMap { [($0, true), ($0, false)] }
@@ -507,8 +571,14 @@ if demo {
                   : "first run: setting up password-free locking from \(me.path) (asks for your password once)...")
             guard install() else { exit(1) }
         }
-        reexecAsRoot()
+        var rootArgs = [installed] + Array(args.dropFirst())
+        if let v = latestRelease(), newer(v, than: version) { rootArgs += ["--latest", v] }
+        signal(SIGINT, SIG_IGN); signal(SIGTERM, SIG_IGN)  // the root lock owns the terminal from here
+        let code = sudo(rootArgs)
+        if code == updateCode { runUpdate() }
+        exit(code)
     }
+    if test, let v = latestRelease(), newer(v, than: version) { updateAvailable = v }
     if !test {
         print("hands off the keyboard, locking in 1s...")
         Thread.sleep(forTimeInterval: 1)

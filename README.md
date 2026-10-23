@@ -62,7 +62,9 @@ keebclean --mute           # no switch sounds
 keebclean --version
 ```
 
-Update with `brew upgrade keebclean`, or by running the install script again.
+When a newer release is out, the lock screen says so: type `update` (like `unlock`) and keebclean unlocks and updates itself, with Homebrew or the install script, whichever you installed with. You can also update yourself with `brew upgrade keebclean`, or by running the install script again.
+
+To find out, keebclean asks GitHub for the latest release at most once a day, as you and never as root, and gives up after 2 seconds. Set `KEEBCLEAN_NO_UPDATE_CHECK=1` to turn that off.
 
 ## Permissions
 
